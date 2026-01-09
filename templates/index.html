@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>斗🐷场</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        .card-container {
+            position: relative; background: #1e293b; border-radius: 6px; overflow: visible; 
+            transition: transform 0.2s; aspect-ratio: 2/3.5; 
+        }
+        .card-container:hover { transform: scale(1.05) translateY(-5px); z-index: 50; }
+        .card-img { width: 100%; height: 100%; object-fit: contain; background: #0f172a; border-radius: 6px; }
+        .card-selected { border: 2px solid #eab308; box-shadow: 0 0 15px rgba(234,179,8,0.5); z-index: 40; }
+        .revealed .card-img { opacity: 0.15; } 
+        .taken { filter: grayscale(1) brightness(0.6); cursor: not-allowed; }
+        .revealed.taken .card-img { opacity: 0.1; }
+        .revealed.taken { filter: none; } 
+        .danmaku-container { pointer-events: none; overflow: hidden; position: absolute; inset: 0; z-index: 50; }
+        .danmaku-item { position: absolute; white-space: nowrap; font-weight: bold; text-shadow: 2px 2px 0 #000; animation: fly 10s linear forwards; }
+        @keyframes fly { from { left: 100%; } to { left: -100%; } }
+        .rule-modal-backdrop { background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px); }
+        .rule-modal-content { background: #0f172a; border: 1px solid #334155; box-shadow: 0 0 50px rgba(0,0,0,0.9); }
+        .btn-disabled { opacity: 0.2; cursor: not-allowed; filter: grayscale(1); pointer-events: none; }
+        .zoom-btn { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.6); color: white; width: 20px; height: 20px; border-radius: 50%; font-size: 12px; display: flex; items-center; justify-content: center; cursor: pointer; z-index: 60; }
+        
+        /* 统计界面样式 */
+        .summary-overlay { background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(10px); z-index: 100; }
+        .summary-table th { background: #334155; color: #fbbf24; padding: 10px; text-align: left; }
+        .summary-table td { border-bottom: 1px solid #334155; padding: 10px; font-family: monospace; }
+        .summary-table tr:hover { background: #1e293b; }
+
+        .rule-h { font-size: 1.1rem; font-weight: bold; color: #fbbf24; margin-top: 1rem; border-bottom: 1px solid #334155; padding-bottom: 0.2rem; }
+        .rule-p { color: #cbd5e1; font-size: 0.9rem; margin-bottom: 0.5rem; line-height: 1.5; }
+        .rule-em { color: #60a5fa; font-weight: bold; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans h-screen flex flex-col overflow-hidden">
+    
+    <div id="rules-modal" class="hidden fixed inset-0 rule-modal-backdrop z-[100] flex items-center justify-center p-4" onclick="toggleRules()">
+        <div class="rule-modal-content p-6 md:p-8 rounded-xl max-w-5xl w-full max-h-[85vh] overflow-y-auto relative" onclick="event.stopPropagation()">
+            <button onclick="toggleRules()" class="absolute top-4 right-4 text-slate-400 hover:text-white">✕</button>
+            <h2 class="text-3xl font-black text-center text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-red-500 mb-6">斗🐷场规则</h2>
+            <div class="grid md:grid-cols-2 gap-8 text-sm">
+                <div>
+                    <h3 class="text-xl font-bold text-blue-400 mb-4 border-b-2 border-blue-900 pb-2">防守方策略</h3>
+                    <div class="rule-p"><b>💰基础资产</b><br>初始 10,000 代币。仅可分配 10 与 100 两种。</div>
+                    <ul class="list-disc pl-5 rule-p"><li>每轮部署的总金额不得少于 3,000 代币。</li><li>所有盒子不可留空。</li><li>系统会根据代币数量，在向攻方展示模糊的数量分级。</li></ul>
+                    <div class="rule-p"><span class="rule-em">策略1:等差</span> <br>22 个盒子的代币总金额必须构成一个等差数列。</div>
+                    <div class="rule-p"><span class="rule-em">策略2:特异</span> <br>每个盒子放入的代币张数完全相同。<br>其中 21 个盒子只装 10 元面值；<br>仅有 1 个盒子 装入 100 元面值。<br>（该盒子被称为“特殊编号”）</div>
+                    <div class="rule-p"><span class="rule-em">策略3:囚犯</span> <br>22 个盒子分别放入 1~22 张 10 元面值代币<br>（数量与编号不对应），<br>并可额外投入若干 100 元面值。</div>
+                </div>
+                <div>
+                    <h3 class="text-xl font-bold text-red-400 mb-4 border-b-2 border-red-900 pb-2">进攻方策略</h3>
+                    <div class="mb-3"><div class="rule-em text-red-400">方案A:盲选（通用）</div><div class="rule-p">在不知晓具体金额的情况下，任选 10 个 盒子。<br>直接获得选定盒子内的全部代币。</div></div>
+                    <div class="mb-3"><div class="rule-em text-red-400">方案B:推演（仅限规则 1 可选）</div><div class="rule-p">每组先查看一个盒子，再猜测另一个盒子金额比其“多”或“少”。<br>共 10 次 猜测机会。<br>若猜中、获得该组两个盒子的全部代币。<br>若猜错、无法获得该组任何代币。</div></div>
+                    <div class="mb-3"><div class="rule-em text-red-400">方案C:追踪（仅限规则 2 可选）</div><div class="rule-p">攻方猜测“特殊编号”的具体数字，<br>系统会给出目标编号比当前猜测是大还是小。<br>若在第 1、2、3、7、8 次猜中，掠夺全部 22 个盒子的代币。<br>若在其他轮次猜中或未猜中，无法获得任何代币。</div></div>
+                    <div class="mb-3"><div class="rule-em text-red-400">方案D:博弈（仅限规则 3 可选）</div><div class="rule-p">攻方指定数字 X（1-22），随后查看 7 个盒子。<br>若其中包含“有 X 张 10 元代币”的盒子，则视为阶段一成功。<br>之后守方指定数字 Y（1-22），攻方再次查看另外 7 个盒子。<br>若包含“有 Y 张 10 元代币”的盒子，则视为阶段二成功。<br>成功两次：获得全部 22 个盒子的代币。<br>成功一次：获得任选 7 个 盒子的代币。<br>全部失败：获得任选 5 个 盒子的代币。</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="view-login" class="fixed inset-0 flex items-center justify-center bg-slate-900 z-[90]">
+        <div class="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-blue-500 w-80 text-center">
+            <h1 class="text-3xl font-black text-blue-400 mb-6 italic">TOKEN ARENA</h1>
+            <input id="inp-uid" type="text" placeholder="输入代号" class="w-full bg-slate-700 p-3 rounded mb-4 text-center text-white outline-none focus:ring-2 ring-blue-500">
+            <button onclick="toLobby()" class="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded font-bold shadow-lg transition transform active:scale-95">进入斗🐷场</button>
+        </div>
+    </div>
+
+    <div id="view-lobby" class="hidden min-h-screen p-8 overflow-y-auto">
+        <div class="max-w-6xl mx-auto">
+            <div class="flex justify-between items-center mb-8 border-b border-slate-800 pb-4">
+                <h2 class="text-3xl font-bold text-white">大厅 <span id="my-id-tag" class="text-sm font-normal text-slate-500 ml-2"></span></h2>
+                <button onclick="createRoom()" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-lg font-bold shadow-lg">+ 新建对局</button>
+            </div>
+            <div id="room-grid" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
+        </div>
+    </div>
+
+    <div id="view-room" class="hidden h-full flex flex-col relative">
+        <div class="h-16 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 shrink-0 z-40">
+            <div class="flex items-center gap-2 md:gap-4 pl-2 md:pl-4"> 
+                <button id="btn-exit" onclick="exitRoom()" class="text-slate-400 hover:text-white transition px-2 py-1 rounded hover:bg-slate-800 text-sm">← 退出</button>
+                <button onclick="toggleRules()" class="bg-slate-700/80 hover:bg-blue-600 text-white px-3 py-1 rounded-full shadow-lg flex items-center gap-2 font-bold border border-slate-500 transition text-xs md:text-sm"><span>📜 规则</span></button>
+                <div class="font-mono font-bold text-yellow-500 text-sm md:text-base ml-2">ROOM <span id="cur-rid"></span></div>
+            </div>
+            <div id="timer-display" class="font-mono font-bold text-red-500 text-xl mx-2">05:00</div>
+            <div id="game-stats" class="hidden flex gap-4 md:gap-8 font-mono text-xs md:text-sm font-bold bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                <div class="text-green-400">我: <span id="score-self">--</span></div>
+                <div class="text-red-400">敌: <span id="score-opp">--</span></div>
+            </div>
+        </div>
+
+        <div class="flex-1 flex overflow-hidden">
+            <div class="flex-1 relative flex flex-col bg-slate-900/50 m-2 rounded-xl border border-slate-800 overflow-hidden">
+                <div id="danmaku-layer" class="danmaku-container"></div>
+                <div id="prep-screen" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-30">
+                    <div id="player-area" class="flex justify-center gap-8 flex-wrap mb-12 max-w-4xl"></div>
+                    <div class="flex gap-4">
+                        <button id="btn-ready" onclick="toggleReady()" class="bg-slate-700 hover:bg-slate-600 px-10 py-4 rounded-xl font-bold border-2 border-slate-600 text-xl transition">准备</button>
+                        <button id="btn-start" onclick="startGame()" class="hidden bg-yellow-600 hover:bg-yellow-500 text-black px-10 py-4 rounded-xl font-bold shadow-lg text-xl transition animate-bounce">开始对局</button>
+                    </div>
+                </div>
+                <div id="spectator-screen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-20 p-8">
+                    <h2 class="text-2xl font-bold mb-4 text-blue-400">当前对局列表 (观战中)</h2>
+                    <div id="match-list" class="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-4xl"></div>
+                </div>
+
+                <div id="game-board" class="hidden flex-1 flex flex-col p-2 md:p-4 w-full max-w-7xl mx-auto relative overflow-hidden">
+                    <div class="flex justify-between items-center mb-2 h-8 shrink-0">
+                        <div class="flex items-center gap-2">
+                            <span id="role-tag" class="px-3 py-1 rounded text-xs font-bold uppercase shadow"></span>
+                            <span class="text-slate-400 text-xs md:text-sm">R <span id="ui-round" class="text-white font-bold">1</span>/6</span>
+                        </div>
+                        <div class="flex gap-2 text-xs font-mono">
+                            <div id="status-def-rule" class="text-green-500 bg-slate-800 px-2 py-1 rounded hidden border border-green-900">守: <span id="val-def-rule"></span></div>
+                            <div id="status-atk-strat" class="text-red-500 bg-slate-800 px-2 py-1 rounded hidden border border-red-900">攻: <span id="val-atk-strat"></span></div>
+                        </div>
+                    </div>
+                    <div id="last-msg" class="h-6 text-center text-yellow-400 text-xs md:text-sm font-mono mb-2 truncate shrink-0"></div>
+                    
+                    <div id="wait-layer" class="hidden absolute inset-0 top-12 bg-slate-900/80 z-10 flex flex-col items-center justify-center backdrop-blur-sm rounded-lg">
+                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mb-4"></div>
+                        <h2 class="text-xl font-bold text-yellow-500">等待对手操作...</h2>
+                    </div>
+
+                    <div id="panel-defense" class="hidden h-full flex flex-col min-h-0">
+                        <div id="def-step-1" class="flex flex-col items-center justify-center h-full space-y-4 md:space-y-8 overflow-y-auto">
+                            <h3 class="text-2xl md:text-3xl font-bold text-green-400 tracking-wider">选择防御规则</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-4xl px-4">
+                                <button onclick="lockRule(1)" class="bg-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-green-500 transition text-center"><div class="text-4xl mb-2">📐</div><div class="font-bold text-lg">规则 1</div></button>
+                                <button onclick="lockRule(2)" class="bg-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-green-500 transition text-center"><div class="text-4xl mb-2">🎯</div><div class="font-bold text-lg">规则 2</div></button>
+                                <button onclick="lockRule(3)" class="bg-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-green-500 transition text-center"><div class="text-4xl mb-2">⛓️</div><div class="font-bold text-lg">规则 3</div></button>
+                            </div>
+                        </div>
+                        <div id="def-step-2" class="hidden flex flex-col h-full overflow-hidden relative">
+                            <div class="flex-1 overflow-y-auto grid grid-cols-3 md:grid-cols-6 lg:grid-cols-8 gap-2 md:gap-3 px-1 p-2 min-h-0" id="box-container-def"></div>
+                            <div class="shrink-0 p-3 bg-slate-900/95 border-t border-slate-700 flex justify-between items-center z-20 shadow-xl">
+                                <div><div class="font-mono text-xs text-slate-400">已分配金额</div><span id="alloc-val" class="font-bold text-xl md:text-2xl font-mono">0</span></div>
+                                <button onclick="submitDefense()" class="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition transform active:scale-95 text-sm md:text-base">提交部署</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="panel-attack" class="hidden h-full flex flex-col min-h-0">
+                        <div id="atk-step-1" class="flex flex-col items-center justify-center h-full space-y-4 md:space-y-8 overflow-y-auto">
+                            <div class="text-center"><h3 class="text-2xl md:text-3xl font-bold text-red-400 mb-2">侦测到守方规则</h3><div id="locked-rule-display" class="text-lg md:text-xl text-slate-400 font-mono"></div></div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-3xl px-4">
+                                <button id="strat-btn-1" onclick="lockStrat(1)" class="bg-slate-800 p-4 md:p-6 rounded-xl border border-slate-700 hover:border-red-500 transition text-left group"><div class="font-bold text-white text-lg">方案 A</div><div class="text-xs text-slate-500">盲选 (10次)</div></button>
+                                <button id="strat-btn-2" onclick="lockStrat(2)" class="bg-slate-800 p-4 md:p-6 rounded-xl border border-slate-700 hover:border-red-500 transition text-left group"><div class="font-bold text-white text-lg">方案 B</div><div class="text-xs text-slate-500">推演比大小</div></button>
+                                <button id="strat-btn-3" onclick="lockStrat(3)" class="bg-slate-800 p-4 md:p-6 rounded-xl border border-slate-700 hover:border-red-500 transition text-left group"><div class="font-bold text-white text-lg">方案 C</div><div class="text-xs text-slate-500">追踪特异点</div></button>
+                                <button id="strat-btn-4" onclick="lockStrat(4)" class="bg-slate-800 p-4 md:p-6 rounded-xl border border-slate-700 hover:border-red-500 transition text-left group"><div class="font-bold text-white text-lg">方案 D</div><div class="text-xs text-slate-500">博弈搜寻</div></button>
+                            </div>
+                        </div>
+                        <div id="atk-step-2" class="hidden flex flex-col h-full overflow-hidden relative">
+                            <div class="flex-1 overflow-y-auto grid grid-cols-3 md:grid-cols-6 lg:grid-cols-8 gap-2 md:gap-3 px-1 p-2 min-h-0" id="box-container-atk"></div>
+                            <div id="action-bar" class="shrink-0 p-3 bg-slate-900/95 border-t border-slate-700 flex items-center gap-4 z-20 shadow-xl">
+                                <div id="action-inputs" class="flex-1 flex gap-2 justify-end text-sm text-slate-400 items-center font-mono truncate"></div>
+                                <button id="btn-act" class="bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-lg font-bold shadow transition transform active:scale-95 whitespace-nowrap">执行</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+             <div class="w-72 md:w-80 bg-slate-900 border-l border-slate-800 flex flex-col shrink-0 z-50 hidden md:flex">
+                <div class="p-3 border-b border-slate-800 font-bold text-slate-400">Chat</div>
+                <div id="chat-box" class="flex-1 overflow-y-auto p-3 space-y-2 text-sm"></div>
+                <div class="p-3 border-t border-slate-800 flex gap-2">
+                    <input id="chat-input" type="text" class="flex-1 bg-slate-800 rounded px-2 py-2 text-white text-sm outline-none focus:ring-1 ring-blue-500" placeholder="发送...">
+                    <button onclick="sendChat()" class="bg-blue-600 px-4 py-1 rounded hover:bg-blue-500 text-white">></button>
+                </div>
+            </div>
+        </div>
+
+        <div id="summary-view" class="hidden fixed inset-0 summary-overlay flex flex-col items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+                <div class="p-6 border-b border-slate-700 bg-slate-800 flex justify-between items-center shrink-0">
+                    <h2 class="text-3xl font-black text-white">GAME SET</h2>
+                    <div class="text-slate-400 text-sm font-mono">将在 <span id="summary-timer" class="text-yellow-400 font-bold">180</span> 秒后自动返回</div>
+                </div>
+                <div class="flex-1 overflow-y-auto p-6">
+                    <table class="w-full text-sm text-slate-300 summary-table">
+                        <thead><tr><th>轮次</th><th>攻方 vs 守方</th><th>规则/策略</th><th>结果</th><th>资金变动</th></tr></thead>
+                        <tbody id="summary-tbody"></tbody>
+                    </table>
+                    <div class="mt-8 grid grid-cols-2 gap-8">
+                        <div class="bg-slate-800 p-4 rounded text-center"><div class="text-slate-500 mb-1">冠军</div><div id="final-winner" class="text-3xl font-black text-yellow-500"></div></div>
+                        <div class="bg-slate-800 p-4 rounded text-center"><div class="text-slate-500 mb-1">我的最终资产</div><div id="final-myscore" class="text-3xl font-bold font-mono text-white"></div></div>
+                    </div>
+                </div>
+                <div class="p-6 border-t border-slate-700 bg-slate-800 flex justify-center shrink-0">
+                    <button id="btn-confirm-summary" onclick="confirmSummary()" class="bg-blue-600 hover:bg-blue-500 text-white px-12 py-3 rounded-xl font-bold text-lg shadow-lg transition transform active:scale-95">确认并返回大厅 (<span id="confirm-count">0</span>/<span id="total-players">0</span>)</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="round-transition" class="fixed inset-0 z-[80] bg-black opacity-0 pointer-events-none flex items-center justify-center">
+        <div class="text-center transform scale-0 transition-transform duration-500" id="round-modal-inner">
+            <h1 class="text-6xl font-black text-white mb-4 drop-shadow-lg" id="rt-title">ROUND END</h1>
+            <div class="text-2xl text-yellow-400 font-mono" id="rt-sub"></div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let myId, myRid, myRole;
+        let selectedBoxes = [];
+        let currentStrat = 0;
+        let hasShownRules = false;
+        let gameDataCache = {}; 
+        let timerInterval = null;
+        let summaryTimerInt = null;
+        const TAROT_FILES = ["0愚者","1魔术师","2女祭司","3皇后","4皇帝","5教皇","6恋人","7战车","8力量","9隐者","10命运之轮","11正义","12倒吊人","13死神","14节制","15恶魔","16高塔","17星星","18月亮","19太阳","20审判","21世界"];
+
+        function toggleRules() { document.getElementById('rules-modal').classList.toggle('hidden'); }
+        function showZoom(src) { Swal.fire({imageUrl: src, imageAlt: 'Card', background: 'transparent', showConfirmButton: false, width: 'auto', padding: 0}); }
+
+        socket.on('connect', () => { const cachedId = localStorage.getItem('hafu_uid'); if(cachedId) { myId = cachedId; socket.emit('reconnect_user', {userId: cachedId}); } });
+        socket.on('reconnect_result', data => { if(data.success) { myId = localStorage.getItem('hafu_uid'); document.getElementById('view-login').classList.add('hidden'); document.getElementById('my-id-tag').innerText = `ID: ${myId}`; if(data.msg === '欢迎回来') { document.getElementById('view-lobby').classList.remove('hidden'); socket.emit('enter_lobby', {userId: myId}); } } });
+        function toLobby() { myId = document.getElementById('inp-uid').value.trim(); if(!myId) return; localStorage.setItem('hafu_uid', myId); document.getElementById('view-login').classList.add('hidden'); document.getElementById('view-lobby').classList.remove('hidden'); document.getElementById('my-id-tag').innerText = `ID: ${myId}`; socket.emit('enter_lobby', {userId: myId}); }
+        function createRoom() { Swal.fire({title:'创建房间', input:'text', background:'#1e293b', color:'#fff'}).then(r=>{ if(r.value) socket.emit('create_room', {roomId: r.value, userId: myId}); }); }
+        function exitRoom() { socket.emit('leave_room', {roomId: myRid, userId: myId}); }
+        socket.on('leave_success', () => { myRid = null; document.getElementById('view-room').classList.add('hidden'); document.getElementById('view-lobby').classList.remove('hidden'); });
+        socket.on('lobby_update', rooms => { document.getElementById('room-grid').innerHTML = rooms.map(r => `<div class="bg-slate-800 p-5 rounded-xl border border-slate-700 hover:border-blue-500 transition relative group"><div class="flex justify-between mb-3"><span class="text-white font-bold text-lg">#${r.id}</span><span class="text-xs bg-slate-900 px-2 py-1 rounded text-blue-400">${r.state}</span></div><div class="text-sm text-slate-400 mb-4 flex items-center gap-2">👤 ${r.count}/10 <span class="text-slate-600">|</span> 👑 ${r.owner}</div><button onclick="socket.emit('join_room',{roomId:'${r.id}',userId:myId})" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded font-bold transition">加入</button></div>`).join(''); });
+        socket.on('join_success', room => { myRid = room.id; document.getElementById('view-lobby').classList.add('hidden'); document.getElementById('view-room').classList.remove('hidden'); document.getElementById('cur-rid').innerText = myRid; if(room.state === "GAME") { document.getElementById('prep-screen').classList.add('hidden'); document.getElementById('btn-exit').classList.add('hidden'); } else { document.getElementById('prep-screen').classList.remove('hidden'); renderPlayers(room); } if(room.is_spectator) document.getElementById('spectator-screen').classList.remove('hidden'); });
+        socket.on('room_sync', renderPlayers);
+        function renderPlayers(room) { document.getElementById('player-area').innerHTML = room.players.map(p => `<div class="flex flex-col items-center transform transition hover:scale-110"><div class="w-16 h-16 rounded-2xl flex items-center justify-center font-bold text-2xl border-4 shadow-lg ${room.ready[p]?'bg-green-600 border-green-400 text-white':'bg-slate-800 border-slate-600 text-slate-400'}">${p[0].toUpperCase()}</div><span class="text-sm mt-2 font-mono ${p===myId?'text-yellow-500 font-bold':''}">${p}</span></div>`).join(''); const isOwner = room.owner === myId; const canStart = room.players.length >= 2 && Object.values(room.ready).filter(v=>v).length === room.players.length; document.getElementById('btn-start').classList.toggle('hidden', !(isOwner && canStart)); const btnReady = document.getElementById('btn-ready'); btnReady.innerText = room.ready[myId] ? "取消准备" : "准备"; btnReady.className = room.ready[myId] ? "bg-red-600 hover:bg-red-500 px-10 py-4 rounded-xl font-bold text-xl transition shadow-lg" : "bg-slate-700 hover:bg-slate-600 px-10 py-4 rounded-xl font-bold border-2 border-slate-600 text-xl transition"; document.getElementById('btn-exit').classList.remove('hidden'); }
+        function toggleReady() { socket.emit('set_ready', {roomId: myRid, userId: myId}); }
+        function startGame() { socket.emit('start_game', {roomId: myRid}); }
+        function startTimerDisplay(serverTime, deadline) { if(timerInterval) clearInterval(timerInterval); if(!deadline || deadline <= 0) { document.getElementById('timer-display').innerText = "00:00"; return; } const update = () => { let remaining = deadline - serverTime - (Date.now()/1000 - window.clientReceiveTime); if (remaining < 0) remaining = 0; const m = Math.floor(remaining / 60).toString().padStart(2, '0'); const s = Math.floor(remaining % 60).toString().padStart(2, '0'); const el = document.getElementById('timer-display'); el.innerText = `${m}:${s}`; if(remaining < 60) el.classList.add('animate-pulse'); else el.classList.remove('animate-pulse'); }; window.clientReceiveTime = Date.now() / 1000; update(); timerInterval = setInterval(update, 1000); }
+
+        socket.on('game_update', data => {
+            const trans = document.getElementById('round-transition');
+            trans.style.opacity = 0; trans.style.pointerEvents = 'none';
+            document.getElementById('prep-screen').classList.add('hidden');
+            document.getElementById('btn-exit').classList.add('hidden');
+            document.getElementById('game-stats').classList.remove('hidden');
+            if(!hasShownRules) { toggleRules(); hasShownRules = true; }
+            if(data.role_info.role === 'spectator') { document.getElementById('spectator-screen').classList.remove('hidden'); document.getElementById('game-board').classList.add('hidden'); return; }
+            document.getElementById('spectator-screen').classList.add('hidden'); document.getElementById('game-board').classList.remove('hidden');
+            
+            const match = data.match_data;
+            gameDataCache = match.game_data;
+            myRole = data.role_info.role;
+            startTimerDisplay(data.server_time, data.round_deadline);
+            document.getElementById('role-tag').innerText = myRole==='defender'?'防守方':'进攻方';
+            document.getElementById('role-tag').className = `px-3 py-1 rounded text-xs font-bold uppercase shadow ${myRole==='defender'?'bg-green-900 text-green-300':'bg-red-900 text-red-300'}`;
+            document.getElementById('ui-round').innerText = match.round;
+            const myScore = data.scores[myId] !== undefined ? data.scores[myId] : 0;
+            const oppId = myRole==='defender' ? match.attacker : match.defender;
+            const oppScore = data.scores[oppId] !== undefined ? data.scores[oppId] : 0;
+            document.getElementById('score-self').innerText = myScore; document.getElementById('score-opp').innerText = oppScore;
+            document.getElementById('last-msg').innerText = match.game_data.last_msg || "";
+            const gd = match.game_data;
+            if(gd.rule > 0) document.getElementById('val-def-rule').innerText = `规则 ${gd.rule}`; document.getElementById('status-def-rule').classList.remove('hidden');
+            if(gd.strategy > 0) document.getElementById('val-atk-strat').innerText = `方案 ${String.fromCharCode(64+gd.strategy)}`; document.getElementById('status-atk-strat').classList.remove('hidden');
+            renderBoard(gd);
+        });
+
+        function renderBoard(gd, readOnly=false) {
+            const step = gd.step;
+            document.getElementById('panel-defense').classList.add('hidden');
+            document.getElementById('panel-attack').classList.add('hidden');
+            document.getElementById('wait-layer').classList.add('hidden');
+            if(step === 'SETUP') {
+                if(myRole === 'defender' && !readOnly) {
+                    document.getElementById('panel-defense').classList.remove('hidden');
+                    if(gd.rule === 0) { document.getElementById('def-step-1').classList.remove('hidden'); document.getElementById('def-step-2').classList.add('hidden'); }
+                    else { document.getElementById('def-step-1').classList.add('hidden'); document.getElementById('def-step-2').classList.remove('hidden'); if(document.getElementById('box-container-def').innerHTML==="") initDefBoxes(); }
+                } else { document.getElementById('wait-layer').classList.remove('hidden'); document.getElementById('wait-layer').querySelector('h2').innerText = "等待对手布防..."; }
+            } else if(step === 'ATTACK_SELECT' || step === 'ATTACKING') {
+                if(myRole === 'attacker' || readOnly) {
+                    document.getElementById('panel-attack').classList.remove('hidden');
+                    if(gd.strategy === 0 && !readOnly) {
+                        document.getElementById('atk-step-1').classList.remove('hidden'); document.getElementById('atk-step-2').classList.add('hidden'); document.getElementById('locked-rule-display').innerText = `规则 ${gd.rule}`;
+                        [1,2,3,4].forEach(i => { const btn = document.getElementById(`strat-btn-${i}`); btn.classList.remove('btn-disabled'); if ((i==2 && gd.rule!=1) || (i==3 && gd.rule!=2) || (i==4 && gd.rule!=3)) btn.classList.add('btn-disabled'); });
+                    } else {
+                        document.getElementById('atk-step-1').classList.add('hidden'); document.getElementById('atk-step-2').classList.remove('hidden');
+                        renderAtkBoxes(gd.public_boxes || gd.boxes, readOnly);
+                        currentStrat = gd.strategy;
+                        if(gd.strategy === 4 && !readOnly) handleStratDLogic(gd); else if(!readOnly) updateActionBtn(); else document.getElementById('action-bar').classList.add('hidden');
+                    }
+                } else {
+                    document.getElementById('wait-layer').classList.remove('hidden');
+                    if(gd.strategy === 4 && gd.s4.stage === 2 && myRole === 'defender') {
+                        document.getElementById('wait-layer').classList.add('hidden');
+                        if(!window.s4_y_input_shown) { window.s4_y_input_shown = true; Swal.fire({title:'防御反击', input:'number', inputLabel:'攻方已行动完毕，请输入数字 Y (1-22) 让其寻找', allowOutsideClick:false, allowEscapeKey:false}).then(r=>{ if(r.value) socket.emit('s4_submit_target', {roomId:myRid, userId:myId, targetNum:r.value}); document.getElementById('wait-layer').classList.remove('hidden'); window.s4_y_input_shown = false; }); }
+                    } else document.getElementById('wait-layer').querySelector('h2').innerText = "等待对手进攻...";
+                }
+            }
+        }
+        
+        function handleStratDLogic(gd) {
+            const s4 = gd.s4;
+            const btn = document.getElementById('btn-act');
+            const inputs = document.getElementById('action-inputs');
+            
+            if(s4.stage === 0) {
+                document.getElementById('wait-layer').classList.add('hidden'); 
+                if(!window.s4_x_input_shown) { 
+                    window.s4_x_input_shown = true; 
+                    Swal.fire({title:'博弈开启', input:'number', inputLabel:'请输入目标数字 X (1-22)', allowOutsideClick:false, allowEscapeKey:false}).then(r=>{ 
+                        if(r.value) socket.emit('s4_submit_target', {roomId:myRid, userId:myId, targetNum:r.value}); 
+                        window.s4_x_input_shown = false; 
+                    }); 
+                }
+                btn.classList.add('hidden');
+            } else if (s4.stage === 1) { 
+                updateActionBtn(); 
+                inputs.innerText = `第一阶段: 请揭示 7 个盒子 (已揭示: ${s4.revealed_phase1.length}/7)`;
+            } else if (s4.stage === 2) { 
+                document.getElementById('wait-layer').classList.remove('hidden'); 
+                document.getElementById('wait-layer').querySelector('h2').innerText = "等待守方输入 Y..."; 
+                btn.classList.add('hidden'); 
+            } else if (s4.stage === 3) { 
+                updateActionBtn();
+                inputs.innerText = `第二阶段: 请揭示 7 个盒子 (已揭示: ${s4.revealed_phase2.length}/7)`;
+            } else if (s4.stage === 4) { 
+                updateActionBtn(); 
+                let count = 5; if(s4.wins === 1) count = 7; if(s4.wins === 2) count = 22;
+                inputs.innerText = `结算阶段: 成功 ${s4.wins} 次，请选择 ${count} 个盒子拿走`;
+            }
+        }
+
+        function lockRule(r) { socket.emit('lock_rule', {roomId: myRid, userId: myId, rule: r}); }
+        function initDefBoxes() { document.getElementById('box-container-def').innerHTML = TAROT_FILES.map((n,i)=>`<div class="bg-slate-800 rounded border border-slate-700 p-1 flex flex-col gap-1"><div class="relative aspect-[2/3] w-full"><img src="/static/cards/${n}.png" class="w-full h-full object-contain bg-slate-900 rounded" onerror="this.src='https://placehold.co/100x150?text=Card'"><div class="zoom-btn" onclick="showZoom(this.previousElementSibling.src)">🔍</div></div><div class="flex items-center gap-1 bg-slate-900 rounded px-1"><span class="text-[10px] text-slate-500 w-4">10</span><input type="number" min="0" class="w-full bg-transparent outline-none text-right inp-c10 text-sm" onchange="checkNeg(this);calcTotal()"></div><div class="flex items-center gap-1 bg-slate-900 rounded px-1"><span class="text-[10px] text-slate-500 w-4">100</span><input type="number" min="0" class="w-full bg-transparent outline-none text-right inp-c100 text-sm" onchange="checkNeg(this);calcTotal()"></div></div>`).join(''); }
+        function checkNeg(el){ if(el.value<0) el.value=0; }
+        function calcTotal() { let t=0; document.querySelectorAll('.inp-c10').forEach((el,i)=>{ t += (+el.value||0)*10 + (+document.querySelectorAll('.inp-c100')[i].value||0)*100; }); const v=document.getElementById('alloc-val'); v.innerText=t; v.className = t<3000 ? "text-red-500 font-bold text-xl md:text-2xl font-mono" : "text-green-400 font-bold text-xl md:text-2xl font-mono"; }
+        function submitDefense() { const boxes = []; let hasNeg=false; document.querySelectorAll('.inp-c10').forEach((el,i)=>{ let c10=+el.value||0, c100=+document.querySelectorAll('.inp-c100')[i].value||0; if(c10<0||c100<0) hasNeg=true; boxes.push({c10, c100}); }); if(hasNeg) return Swal.fire('错误','不能为负','error'); let total = boxes.reduce((a,b)=>a+b.c10*10+b.c100*100, 0); if(total < 3000) return Swal.fire('金额不足','部署金额需至少3000','warning'); socket.emit('submit_defense', {roomId: myRid, userId: myId, boxes}); }
+        function lockStrat(s) { socket.emit('select_strategy', {roomId: myRid, userId: myId, strategy: s}); }
+        
+        function renderAtkBoxes(boxes, readOnly) {
+            document.getElementById('box-container-atk').innerHTML = boxes.map((b,i)=>`
+                <div onclick="${readOnly||b.taken||b.revealed?'':'clkBox('+i+')'}" id="b-${i}" class="card-container border border-slate-700 bg-slate-800 flex flex-col items-center relative cursor-pointer group ${b.taken?'taken':''} ${b.revealed?'revealed':''}">
+                    <img src="/static/cards/${TAROT_FILES[i]}.png" class="absolute inset-0 w-full h-full object-contain rounded opacity-60 group-hover:opacity-100 transition duration-300">
+                    <div class="zoom-btn" onclick="event.stopPropagation();showZoom(this.previousElementSibling.src)">🔍</div>
+                    <div class="absolute inset-0 z-20 flex flex-col items-center justify-center pointer-events-none">
+                        ${b.revealed ? 
+                        `<div class="bg-slate-900/95 p-1 rounded-lg border-2 border-yellow-500 text-xs text-white font-mono shadow-2xl z-50 transform scale-110">
+                            <div class="text-green-400 font-bold">10: ${b.real_c10!==undefined?b.real_c10:'?'}</div>
+                            <div class="text-red-400 font-bold">100: ${b.real_c100!==undefined?b.real_c100:'?'}</div>
+                         </div>` : 
+                        `<span class="font-black text-xl drop-shadow-md bg-black/40 px-2 rounded ${['多','较多'].includes(b.grade)?'text-red-400':'text-green-400'}">${b.taken?'':b.grade}</span>`}
+                    </div>
+                    <span class="absolute top-1 left-2 text-xs text-white z-20 font-bold bg-black/50 px-1 rounded">#${i}</span>
+                    ${selectedBoxes.includes(i)?'<div class="absolute inset-0 border-4 border-yellow-500 rounded z-30 box-shadow-glow"></div>':''}
+                </div>
+            `).join('');
+        }
+        
+        function clkBox(i) {
+            if(currentStrat === 3) { Swal.fire({ title: `确认猜测 #${i}?`, text: "这是特殊的盒子吗？", icon: 'question', showCancelButton: true, confirmButtonText: '确定', cancelButtonText: '取消' }).then(r => { if(r.isConfirmed) socket.emit('execute_attack', {roomId:myRid, userId:myId, guessIdx:i}); }); return; }
+            if(currentStrat === 1) { selectedBoxes = [i]; }
+            else if (currentStrat === 2) { if (window.s2_step_idx === undefined || window.s2_step_idx === null) { socket.emit('s2_reveal_first', {roomId:myRid, userId:myId, boxId:i}); window.s2_step_idx = i; selectedBoxes = [i]; } else { if (i === window.s2_step_idx) return; selectedBoxes = [window.s2_step_idx, i]; updateActionBtn(); window.s2_step_idx = null; } return; }
+            else if (currentStrat === 4) {
+                const s4 = gameDataCache.s4;
+                if(s4.stage === 1 || s4.stage === 3) { socket.emit('s4_reveal', {roomId:myRid, userId:myId, boxId:i}); return; }
+                if(s4.stage === 4) {
+                     let maxCount = 5; if(s4.wins === 1) maxCount = 7; if(s4.wins === 2) maxCount = 22;
+                     if(selectedBoxes.includes(i)) { selectedBoxes = selectedBoxes.filter(x=>x!==i); } 
+                     else { if(selectedBoxes.length < maxCount) selectedBoxes.push(i); else Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 1500}).fire({icon: 'warning', title: `上限 ${maxCount} 个`}); }
+                }
+            }
+            else { if(selectedBoxes.includes(i)) selectedBoxes=selectedBoxes.filter(x=>x!==i); else selectedBoxes.push(i); }
+            
+            // 修复：传入缓存数据防止白屏
+            const boxesToRender = gameDataCache.public_boxes || gameDataCache.boxes || [];
+            renderAtkBoxes(boxesToRender, false); 
+            if(currentStrat === 1 && selectedBoxes.length === 1) { socket.emit('execute_attack', {roomId:myRid,userId:myId,boxId:selectedBoxes[0]}); selectedBoxes = []; }
+            updateActionBtn();
+        }
+        
+        function updateActionBtn() {
+            const btn = document.getElementById('btn-act'); const inputs = document.getElementById('action-inputs'); const gd = gameDataCache; inputs.innerHTML = '';
+            btn.classList.remove('hidden'); btn.disabled = false; btn.innerText = "执行"; btn.className = "bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-lg font-bold shadow transition transform active:scale-95 whitespace-nowrap"; btn.onclick = null;
+
+            if(currentStrat===1) { btn.innerText = "处理中..."; btn.disabled = true; } 
+            else if(currentStrat===2) { if (selectedBoxes.length === 2) { Swal.fire({ title: '决断时刻', text: '后选比前选...', icon: 'question', showDenyButton: true, showCancelButton: false, confirmButtonText: '更大(含相等)', denyButtonText: '更小', confirmButtonColor: '#16a34a', denyButtonColor: '#dc2626', allowOutsideClick: false }).then((result) => { const guess = result.isConfirmed ? 'more' : 'less'; socket.emit('execute_attack', {roomId:myRid,userId:myId,boxA:selectedBoxes[0],boxB:selectedBoxes[1],guess:guess}); selectedBoxes = []; }); } } 
+            else if(currentStrat===3) { inputs.innerHTML = "点击卡牌追踪"; btn.classList.add('hidden'); } 
+            else if(currentStrat===4) {
+                const s4 = gd.s4;
+                if (s4.stage === 1 || s4.stage === 3) { inputs.innerHTML = "点击未揭示的卡牌寻找"; btn.classList.add('hidden'); } 
+                else if (s4.stage === 4) { 
+                    btn.classList.remove('hidden');
+                    let count = 5; if(s4.wins === 1) count = 7; if(s4.wins === 2) count = 22; 
+                    inputs.innerHTML = `已选择: <span class="text-yellow-400 font-bold">${selectedBoxes.length}</span> / ${count}`;
+                    if(count===22) { 
+                        btn.innerText = "一键掠夺全场"; 
+                        btn.onclick = ()=>{ const all = Array.from({length:22},(_,i)=>i); socket.emit('s4_execute_pick', {roomId:myRid,userId:myId,pickIndices:all}); }; 
+                    } else { 
+                        if(selectedBoxes.length === count) {
+                            btn.innerText = "确认掠夺";
+                            btn.className = "bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-lg font-bold shadow animate-pulse";
+                            btn.onclick = ()=>{ socket.emit('s4_execute_pick', {roomId:myRid,userId:myId,pickIndices:selectedBoxes}); selectedBoxes=[]; }; 
+                        } else {
+                            btn.innerText = `请选满 ${count} 个`;
+                            btn.className = "bg-slate-700 text-slate-500 px-6 py-2 rounded-lg font-bold cursor-not-allowed";
+                        }
+                    } 
+                }
+            }
+        }
+
+        socket.on('strat3_hint', data => Swal.fire(`第${data.count}次尝试`, `结果：${data.hint}`, 'info'));
+        socket.on('round_summary', data => { const trans = document.getElementById('round-transition'); const inner = document.getElementById('round-modal-inner'); const sub = document.getElementById('rt-sub'); trans.style.opacity = 1; inner.style.transform = 'scale(1)'; sub.innerHTML = `本轮结束<br>防守方回收: ${data.refund}`; setTimeout(() => { trans.style.opacity = 0; inner.style.transform = 'scale(0)'; }, 3500); });
+        
+        socket.on('show_game_summary', data => {
+            document.getElementById('round-transition').style.opacity = 0; 
+            document.getElementById('summary-view').classList.remove('hidden');
+            document.getElementById('game-board').classList.add('hidden'); 
+            const tbody = document.getElementById('summary-tbody');
+            tbody.innerHTML = data.history.map(h => {
+                const isMeDef = h.defender === myId, isMeAtk = h.attacker === myId;
+                const defName = isMeDef ? `<span class="text-green-400 font-bold">我</span>` : h.defender;
+                const atkName = isMeAtk ? `<span class="text-red-400 font-bold">我</span>` : h.attacker;
+                let change = ""; if (h.pnl_def !== 0) change += `守: ${h.pnl_def > 0 ? '+' : ''}${h.pnl_def} `; if (h.pnl_atk !== 0) change += `攻: ${h.pnl_atk > 0 ? '+' : ''}${h.pnl_atk}`;
+                return `<tr><td>R${h.round}</td><td>${atkName} <span class="text-slate-500 text-xs">vs</span> ${defName}</td><td><div class="text-xs text-slate-400">守:规则${h.rule}</div><div class="text-xs text-slate-400">攻:方案${h.strat ? String.fromCharCode(64+h.strat) : '-'}</div></td><td>${h.result}</td><td class="font-mono ${change.includes('-') ? 'text-red-300' : 'text-green-300'}">${change}</td></tr>`;
+            }).join('');
+            document.getElementById('final-winner').innerText = data.winner;
+            document.getElementById('final-myscore').innerText = data.scores[myId] || 0;
+            document.getElementById('total-players').innerText = Object.keys(data.scores).length;
+            let sec = 180; if(summaryTimerInt) clearInterval(summaryTimerInt);
+            summaryTimerInt = setInterval(() => { sec--; document.getElementById('summary-timer').innerText = sec; if(sec <= 0) clearInterval(summaryTimerInt); }, 1000);
+        });
+
+        socket.on('update_confirm_count', count => { document.getElementById('confirm-count').innerText = count; });
+        socket.on('reset_to_lobby', () => {
+            if(summaryTimerInt) clearInterval(summaryTimerInt);
+            document.getElementById('summary-view').classList.add('hidden');
+            document.getElementById('game-stats').classList.add('hidden');
+            selectedBoxes = []; currentStrat = 0; gameDataCache = {};
+            document.getElementById('prep-screen').classList.remove('hidden');
+            document.getElementById('btn-exit').classList.remove('hidden');
+            document.getElementById('view-room').classList.remove('hidden');
+            socket.emit('get_room_sync', {roomId: myRid});
+        });
+        function confirmSummary() {
+            document.getElementById('btn-confirm-summary').disabled = true;
+            document.getElementById('btn-confirm-summary').classList.add('btn-disabled');
+            document.getElementById('btn-confirm-summary').innerText = "已确认，等待他人...";
+            socket.emit('confirm_summary', {roomId: myRid, userId: myId});
+        }
+        function sendChat(){ const i=document.getElementById('chat-input'); if(i.value) { socket.emit('send_chat',{roomId:myRid,userId:myId,msg:i.value}); i.value=''; } }
+        socket.on('chat_message', d=>{ const box = document.getElementById('chat-box'); box.innerHTML += `<div class="mb-1 break-words"><span class="${d.type==='info'?'text-yellow-400':'text-blue-400'} font-bold">${d.user}:</span> ${d.msg}</div>`; box.scrollTop = box.scrollHeight; if(d.type==='chat') { const dan = document.createElement('div'); dan.className='danmaku-item text-xl'; dan.innerText=d.msg; dan.style.top=10 + Math.random()*60+'%'; document.getElementById('danmaku-layer').appendChild(dan); setTimeout(()=>dan.remove(),10000); } });
+        socket.on('error', d=>Swal.fire('Error',d.msg,'error'));
+    </script>
+</body>
+</html>

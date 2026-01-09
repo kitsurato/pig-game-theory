@@ -1,0 +1,5 @@
+flask
+flask-socketio
+eventlet
+gunicorn
+simple-websocket
