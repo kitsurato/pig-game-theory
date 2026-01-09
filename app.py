@@ -1,3 +1,5 @@
+import eventlet
+eventlet.monkey_patch()
 import time, random, uuid
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -643,4 +645,5 @@ def reset_room_logic(rid):
     socketio.emit('room_sync', room, room=rid)
 
 if __name__ == '__main__':
+
     socketio.run(app, host='0.0.0.0', port=5005, debug=True)
